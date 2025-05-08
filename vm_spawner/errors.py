@@ -1,0 +1,2 @@
+class VmSpawnError(Exception):
+    pass
