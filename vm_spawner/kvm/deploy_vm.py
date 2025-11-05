@@ -240,7 +240,7 @@ def deploy_vm_auto(host: str, ssh_key: Path | None) -> VMConfig:
                 pool_type="dir",
                 pool_path=Path("/var/lib/libvirt/images/ubuntu-pool-py"),
                 base_image_url="https://cloud-images.ubuntu.com/minimal/releases/noble/release/ubuntu-24.04-minimal-cloudimg-amd64.img",
-                base_image_checksum="a8e8b39f8c76d51cdf1544b71d5096b0df22a2ef3576d8cbfcbf7351df10602e",
+                base_image_checksum="c37d5ee2015a1039d58520b11e6fc012e695d6a224d0250c7a2eff8e91447adc",
                 base_image_vol_name="ubuntu-24.04-minimal-cloudimg-amd64.qcow2",  # Base image name in pool
                 base_image_format="qcow2",
                 local_download_dir=local_tmp_dir,

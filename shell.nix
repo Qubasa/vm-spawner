@@ -3,19 +3,17 @@
   mypy,
   ruff,
   vm-spawner,
-  custom_treefmt,
   ...
 }:
 mkShell {
   buildInputs = [
     mypy
     ruff
-    custom_treefmt
   ] ++ vm-spawner.propagatedBuildInputs;
 
   shellHook = ''
     export GIT_ROOT="$(git rev-parse --show-toplevel)"
-    export PKG_ROOT="$GIT_ROOT/pkgs/vm-spawner"
+    export PKG_ROOT="$GIT_ROOT"
     export PYTHONWARNINGS=error
 
     # Add current package to PYTHONPATH
