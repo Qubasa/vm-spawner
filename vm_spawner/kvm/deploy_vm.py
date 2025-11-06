@@ -2,6 +2,7 @@
 
 # ruff: noqa: TRY301 TRY300
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -102,30 +103,49 @@ def deploy_vm(cfg: DeployVMConfig, ssh_key: Path | None) -> VMConfig:
             ssh_key,
         )
 
-        # 4. Create Linked Clone Disk on Remote Host
-        # create_linked_clone_disk raises exceptions on failure
-        log.info(f"Creating linked clone for VM '{cfg.domain_name}'...")
-        cloned_disk_path = create_linked_clone_disk(
-            storage_pool=storage_pool,
-            remote_host=cfg.remote_user_host,
-            base_volume=base_volume,
-            clone_img_name=cfg.domain_name,  # Use VM name for the clone image filename
-            ssh_key=ssh_key,
-        )
-        # We need the volume name (filename) for virt-install, not the full path
-        cloned_volume_name = cloned_disk_path.name
+        # 4. Handle disk setup based on image format
+        is_iso = cfg.base_image_format.lower() == "iso"
+
+        if is_iso:
+            # For ISO: use the ISO directly as CDROM, create a blank disk for OS installation
+            log.info(f"Using ISO '{cfg.base_image_vol_name}' as installation media...")
+            iso_volume_name = cfg.base_image_vol_name
+            # Create a blank disk for the VM
+            from .create import create_blank_disk
+            blank_disk_path = create_blank_disk(
+                storage_pool=storage_pool,
+                remote_host=cfg.remote_user_host,
+                disk_name=cfg.domain_name,
+                disk_size_gb=20,  # Default 20GB
+                ssh_key=ssh_key,
+            )
+            disk_volume_name = blank_disk_path.name
+            cdrom_volume_name = iso_volume_name
+        else:
+            # For disk images (qcow2): create linked clone as before
+            log.info(f"Creating linked clone for VM '{cfg.domain_name}'...")
+            cloned_disk_path = create_linked_clone_disk(
+                storage_pool=storage_pool,
+                remote_host=cfg.remote_user_host,
+                base_volume=base_volume,
+                clone_img_name=cfg.domain_name,
+                ssh_key=ssh_key,
+            )
+            disk_volume_name = cloned_disk_path.name
+            cdrom_volume_name = None
 
         # 5. Create Domain using virt-install
         # install_domain_with_virt_install raises exceptions on failure
         log.info(
-            f"Installing domain '{cfg.domain_name}' using clone '{cloned_volume_name}'..."
+            f"Installing domain '{cfg.domain_name}'..."
         )
         install_domain_with_virt_install(
             conn=conn,
             name=cfg.domain_name,
             memory_mb=cfg.memory_mb,
             vcpu=cfg.vcpu,
-            base_volume_name=cloned_volume_name,  # Pass the *name* of the clone
+            disk_volume_name=disk_volume_name,
+            cdrom_volume_name=cdrom_volume_name,
             pool_name=storage_pool.name(),
             primary_network=cfg.primary_network,
             isolated_network=cfg.isolated_network,
@@ -203,8 +223,45 @@ from vm_spawner.assets import get_cloud_asset
 
 def deploy_vm_auto(host: str, ssh_key: Path | None) -> VMConfig:
     """High-level function to deploy a VM with default settings."""
-    vm_name = f"ubuntu-{uuid4()}"
+    vm_name = f"nixos-{uuid4()}"
     log.info(f"Starting automatic deployment for new VM: {vm_name}")
+
+    # Get base image from environment variable
+    base_image = os.environ.get("CLAN_BASE_IMAGE")
+    if not base_image:
+        msg = "Environment variable CLAN_BASE_IMAGE is not set. Please set it to the path or URL of the ISO image."
+        log.error(msg)
+        raise ValueError(msg)
+
+    log.info(f"Using base image from CLAN_BASE_IMAGE: {base_image}")
+
+    # Derive volume name and format from the image path/URL
+    base_image_path = Path(base_image)
+    base_image_vol_name = base_image_path.name
+
+    # Detect image format from file extension
+    suffix = base_image_path.suffix.lower().lstrip(".")
+    if suffix in ("qcow2", "qcow"):
+        base_image_format = "qcow2"
+    elif suffix == "iso":
+        base_image_format = "iso"
+    elif suffix == "raw":
+        base_image_format = "raw"
+    else:
+        log.warning(
+            f"Unknown image format '{suffix}', defaulting to 'raw'. "
+            "Supported formats: qcow2, iso, raw"
+        )
+        base_image_format = "raw"
+
+    log.info(f"Detected image format: {base_image_format}")
+
+    # Optional checksum from environment variable
+    base_image_checksum = os.environ.get("CLAN_BASE_IMAGE_CHECKSUM")
+    if base_image_checksum:
+        log.info(f"Using checksum: {base_image_checksum}")
+    else:
+        log.warning("CLAN_BASE_IMAGE_CHECKSUM not set, skipping checksum verification")
 
     # Ensure local assets can be retrieved
     try:
@@ -236,20 +293,20 @@ def deploy_vm_auto(host: str, ssh_key: Path | None) -> VMConfig:
                 libvirt_uri=libvirt_uri,
                 remote_tmp_dir=remote_tmp_dir,
                 libvirt_remote_uri="qemu:///system",  # URI for virt-install *on* the remote host
-                pool_name="ubuntu_pool_py",
+                pool_name="nixos_pool_py",
                 pool_type="dir",
-                pool_path=Path("/var/lib/libvirt/images/ubuntu-pool-py"),
-                base_image_url="https://cloud-images.ubuntu.com/minimal/releases/noble/release/ubuntu-24.04-minimal-cloudimg-amd64.img",
-                base_image_checksum="c37d5ee2015a1039d58520b11e6fc012e695d6a224d0250c7a2eff8e91447adc",
-                base_image_vol_name="ubuntu-24.04-minimal-cloudimg-amd64.qcow2",  # Base image name in pool
-                base_image_format="qcow2",
+                pool_path=Path("/var/lib/libvirt/images/nixos-pool-py"),
+                base_image_url=base_image,
+                base_image_checksum=base_image_checksum,
+                base_image_vol_name=base_image_vol_name,
+                base_image_format=base_image_format,
                 local_download_dir=local_tmp_dir,
                 domain_name=vm_name,
-                memory_mb=2048,
-                vcpu=2,
+                memory_mb=6144,
+                vcpu=4,
                 primary_network="default",  # Assumes 'default' libvirt network exists
-                isolated_network="isolated",  # Assumes 'isolated' libvirt network exists
-                os_variant="ubuntu24.04",  # OS Hint for virt-install
+                isolated_network=None,  # Optional second network
+                os_variant="nixos-unstable",  # OS Hint for virt-install
                 user_data=default_user_data,
                 network_config=default_network_config,
                 virt_install_extra_args=None,

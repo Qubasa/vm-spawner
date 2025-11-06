@@ -3,6 +3,7 @@
 import contextlib
 import hashlib
 import logging
+import shutil
 import time
 import urllib.error
 import urllib.request
@@ -57,7 +58,8 @@ def _verify_checksum(file_path: Path, expected_checksum: str) -> None:
 def download_file(url: str, destination: Path, checksum: str | None = None) -> None:
     """
     Downloads a file from a URL to a destination path using urllib,
-    optionally verifying its SHA256 checksum.
+    or copies it if the URL is a local file path.
+    Optionally verifies its SHA256 checksum.
 
     Raises:
         ValueError: If checksum verification fails.
@@ -65,6 +67,7 @@ def download_file(url: str, destination: Path, checksum: str | None = None) -> N
         urllib.error.HTTPError: For HTTP errors (like 404).
         OSError: For file system errors during write.
         RuntimeError: For other unexpected errors or read errors during verification.
+        FileNotFoundError: If the source local file doesn't exist.
     """
     if destination.exists():
         log.info(f"File {destination} already exists.")
@@ -83,6 +86,57 @@ def download_file(url: str, destination: Path, checksum: str | None = None) -> N
             log.info("No checksum provided, using existing file.")
             return  # Success, file exists
 
+    # Detect if the "url" is actually a local file path
+    is_local_file = False
+    source_path = None
+
+    # Check if it looks like a local path (starts with / or ./ or ../)
+    if url.startswith('/') or url.startswith('./') or url.startswith('../'):
+        source_path = Path(url)
+        is_local_file = True
+    # Also check if it's a valid Path object that exists
+    elif not any(url.startswith(proto) for proto in ['http://', 'https://', 'ftp://', 'file://']):
+        # Try treating it as a local path
+        source_path = Path(url)
+        if source_path.exists():
+            is_local_file = True
+
+    # Handle local file copy
+    if is_local_file and source_path:
+        if not source_path.exists():
+            msg = f"Source file does not exist: {source_path}"
+            log.error(msg)
+            raise FileNotFoundError(msg)
+
+        if not source_path.is_file():
+            msg = f"Source path is not a file: {source_path}"
+            log.error(msg)
+            raise ValueError(msg)
+
+        log.info(f"Copying local file {source_path} to {destination}...")
+        try:
+            # Ensure parent directory exists
+            destination.parent.mkdir(parents=True, exist_ok=True)
+
+            # Copy the file
+            shutil.copy2(source_path, destination)
+            log.info(f"File copied successfully to {destination}")
+
+            # Verify checksum if provided
+            if checksum:
+                _verify_checksum(destination, checksum)
+
+            return  # Success
+
+        except OSError as e:
+            log.error(f"Error copying file from {source_path} to {destination}: {e}", exc_info=True)
+            # Clean up potentially partial file
+            with contextlib.suppress(OSError):
+                if destination.exists():
+                    destination.unlink()
+            raise
+
+    # Handle URL download
     log.info(f"Downloading {url} to {destination}...")
     try:
         # Ensure parent directory exists

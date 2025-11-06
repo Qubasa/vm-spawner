@@ -323,6 +323,119 @@ def ensure_volume_from_file(
         raise RuntimeError(msg) from e
 
 
+def create_blank_disk(
+    storage_pool: libvirt.virStoragePool,
+    remote_host: str,
+    disk_name: str,
+    disk_size_gb: int,
+    ssh_key: Path | None,
+) -> Path:
+    """
+    Creates a blank qcow2 disk on the remote host using qemu-img.
+
+    Args:
+        storage_pool: The libvirt storage pool where the disk will reside.
+        remote_host: The user@host string for SSH access.
+        disk_name: The desired name for the disk volume (without extension).
+        disk_size_gb: Size of the disk in GB.
+        ssh_key: Path to the SSH key for remote access.
+
+    Returns:
+        The Path object representing the remote path of the created blank disk.
+    Raises:
+        RuntimeError: If the blank disk cannot be created or the pool refreshed.
+        RemoteCommandError: If the ssh commands fail.
+    """
+    try:
+        # Get pool path
+        pool_xml = storage_pool.XMLDesc(0)
+        import xml.etree.ElementTree as ET
+        pool_root = ET.fromstring(pool_xml)
+        pool_path_elem = pool_root.find(".//target/path")
+        if pool_path_elem is None or pool_path_elem.text is None:
+            msg = f"Could not determine path for pool '{storage_pool.name()}'"
+            raise RuntimeError(msg)
+        pool_path = Path(pool_path_elem.text)
+
+        # Create disk filename
+        disk_filename = f"{disk_name}.qcow2"
+        remote_disk_path = pool_path / disk_filename
+
+        log.info(f"Creating blank disk at: {remote_disk_path}")
+
+        # Check if disk already exists
+        check_disk_cmd = ["test", "-f", str(remote_disk_path)]
+        log.info(
+            f"Checking if remote blank disk exists: {' '.join(map(shlex.quote, check_disk_cmd))}"
+        )
+        try:
+            check_result = run_remote_command(
+                remote_host,
+                check_disk_cmd,
+                check=False,
+                ssh_key=ssh_key,
+                timeout=30,
+            )
+            if check_result.returncode == 0:
+                log.info(
+                    f"Remote blank disk {remote_disk_path} already exists. Skipping creation."
+                )
+                storage_pool.refresh(0)
+                return remote_disk_path
+            if check_result.returncode == 1:
+                log.info("Remote blank disk does not exist. Creating...")
+            else:
+                msg = "'test -f' command failed unexpectedly"
+                raise RemoteCommandError(
+                    msg,
+                    command=check_disk_cmd,
+                    returncode=check_result.returncode,
+                    stderr=check_result.stderr,
+                )
+        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+            msg = f"Failed to check for existing blank disk: {e}"
+            raise RemoteCommandError(msg, command=check_disk_cmd) from e
+
+        # Create the blank disk using qemu-img
+        qemu_img_cmd = [
+            "qemu-img",
+            "create",
+            "-f",
+            "qcow2",
+            str(remote_disk_path),
+            f"{disk_size_gb}G",
+        ]
+        run_remote_command(
+            remote_host, qemu_img_cmd, timeout=120, ssh_key=ssh_key
+        )
+
+        log.info(f"Blank disk created successfully at {remote_disk_path}.")
+        log.info(
+            f"Refreshing pool '{storage_pool.name()}' after creating blank disk..."
+        )
+        storage_pool.refresh(0)
+
+        return remote_disk_path
+
+    except libvirt.libvirtError as e:
+        log.error(
+            f"Libvirt error during blank disk creation or pool refresh: {e}",
+            exc_info=True,
+        )
+        msg = "Libvirt operation failed during blank disk creation"
+        raise RuntimeError(msg) from e
+    except RemoteCommandError as e:
+        log.error(
+            f"Remote command failed during blank disk creation: {e}", exc_info=False
+        )
+        print(str(e), file=sys.stderr)
+        raise
+    except Exception as e:
+        log.exception("An unexpected error occurred creating blank disk.")
+        msg = "Unexpected error creating blank disk"
+        raise RuntimeError(msg) from e
+
+
 def create_linked_clone_disk(
     storage_pool: libvirt.virStoragePool,
     remote_host: str,

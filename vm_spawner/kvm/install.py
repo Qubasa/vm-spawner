@@ -35,7 +35,8 @@ def install_domain_with_virt_install(
     name: str,
     memory_mb: int,
     vcpu: int,
-    base_volume_name: str,  # Just the name of the volume (e.g., clone name)
+    disk_volume_name: str,  # Name of the primary disk volume
+    cdrom_volume_name: str | None,  # Name of the CDROM volume (ISO), None if not using CDROM
     pool_name: str,
     primary_network: str,
     isolated_network: str | None,
@@ -81,29 +82,33 @@ def install_domain_with_virt_install(
             )
             # Do not raise here, allow install attempt
 
-    # 2. Define remote paths for cloud-init files
+    # 2. Upload cloud-init files only if not using CDROM
+    # (ISO installations don't use cloud-init)
     remote_user_data_path = remote_tmp_dir / f"{name}-user-data.cfg"
     remote_network_config_path = remote_tmp_dir / f"{name}-network-config.cfg"
 
-    # 3. Upload cloud-init files (assuming vm_spawner.upload raises on error)
-    try:
-        log.info(
-            f"Uploading {user_data_path} to {remote_user_host}:{remote_user_data_path}..."
-        )
-        upload(remote_user_host, user_data_path, remote_user_data_path, ssh_key=ssh_key)
-        log.info(
-            f"Uploading {network_config_path} to {remote_user_host}:{remote_network_config_path}..."
-        )
-        upload(
-            remote_user_host,
-            network_config_path,
-            remote_network_config_path,
-            ssh_key=ssh_key,
-        )
-    except Exception as upload_e:  # Catch specific upload errors if possible
-        log.error(f"Failed to upload cloud-init files: {upload_e}", exc_info=True)
-        msg = "Failed to upload cloud-init files"
-        raise RuntimeError(msg) from upload_e
+    if not cdrom_volume_name:
+        # 3. Upload cloud-init files (assuming vm_spawner.upload raises on error)
+        try:
+            log.info(
+                f"Uploading {user_data_path} to {remote_user_host}:{remote_user_data_path}..."
+            )
+            upload(remote_user_host, user_data_path, remote_user_data_path, ssh_key=ssh_key)
+            log.info(
+                f"Uploading {network_config_path} to {remote_user_host}:{remote_network_config_path}..."
+            )
+            upload(
+                remote_user_host,
+                network_config_path,
+                remote_network_config_path,
+                ssh_key=ssh_key,
+            )
+        except Exception as upload_e:  # Catch specific upload errors if possible
+            log.error(f"Failed to upload cloud-init files: {upload_e}", exc_info=True)
+            msg = "Failed to upload cloud-init files"
+            raise RuntimeError(msg) from upload_e
+    else:
+        log.info("Skipping cloud-init upload for ISO-based installation")
 
     shell_cmd = []
     # Check if virt-install should be run inside nix-shell
@@ -117,28 +122,61 @@ def install_domain_with_virt_install(
         f"--name={name}",
         f"--memory={memory_mb}",
         f"--vcpus={vcpu}",
-        f"--disk=vol={pool_name}/{base_volume_name},device=disk,bus=virtio",  # Reference the volume
-        f"--network=network={primary_network},model=virtio",
     ]
+
+    # Configure disk and boot based on whether we're using CDROM (ISO) or not
+    if cdrom_volume_name:
+        # ISO installation: add blank disk, CDROM, and virtiofs filesystem for /nix/store
+        # virtiofs requires shared memory with memfd backend
+        virt_install_cmd.extend([
+            f"--disk=vol={pool_name}/{disk_volume_name},device=disk,bus=virtio",
+            f"--disk=vol={pool_name}/{cdrom_volume_name},device=cdrom,bus=sata,readonly=on",
+            "--memorybacking=source.type=memfd,access.mode=shared",
+            "--filesystem=/nix/store,nix-store,driver.type=virtiofs,readonly=on",
+        ])
+    else:
+        # Direct disk import: use the disk volume
+        virt_install_cmd.append(
+            f"--disk=vol={pool_name}/{disk_volume_name},device=disk,bus=virtio"
+        )
+
+    virt_install_cmd.append(f"--network=network={primary_network},model=virtio")
     if isolated_network:
         virt_install_cmd.append(f"--network=network={isolated_network},model=virtio")
 
-    virt_install_cmd.extend(
-        [
-            f"--os-variant={os_variant}",
-            "--import",
-            f"--cloud-init=user-data={remote_user_data_path!s},network-config={remote_network_config_path!s}",
-            "--graphics=none",
-            "--console=pty,target_type=serial",
-            "--machine=q35",
-            "--boot=hd",
-            "--noautoconsole",
-            "--check=disk_size=off",
-            "--video=qxl",
-            "--rng=/dev/urandom,model=virtio",
-            # "--debug", # Uncomment for verbose virt-install output
-        ]
-    )
+    virt_install_cmd.extend([
+        f"--os-variant={os_variant}",
+    ])
+
+    # Add import flag and cloud-init only if not using CDROM
+    if not cdrom_volume_name:
+        virt_install_cmd.append("--import")
+        virt_install_cmd.append(
+            f"--cloud-init=user-data={remote_user_data_path!s},network-config={remote_network_config_path!s}"
+        )
+
+    virt_install_cmd.extend([
+        #"--graphics=none",
+        "--console=pty,target_type=serial",
+        "--machine=q35",
+    ])
+
+    # Boot configuration
+    if cdrom_volume_name:
+        # Boot from HD first, CDROM second - this way after installation completes,
+        # the VM will boot from the installed OS instead of the installer
+        # Using explicit boot device syntax for newer virt-install versions
+        virt_install_cmd.append("--boot=boot0.dev=hd,boot1.dev=cdrom")
+    else:
+        virt_install_cmd.append("--boot=hd")
+
+    virt_install_cmd.extend([
+        "--noautoconsole",
+        "--check=disk_size=off",
+        "--video=qxl",
+        "--rng=/dev/urandom,model=virtio",
+        # "--debug", # Uncomment for verbose virt-install output
+    ])
     if extra_virt_install_args:
         virt_install_cmd.extend(extra_virt_install_args)
 
@@ -164,12 +202,10 @@ def install_domain_with_virt_install(
 
     except RemoteCommandError as e:
         # This catches non-zero exit code from virt-install
-        log.error(
-            f"virt-install for domain '{name}' failed.", exc_info=False
-        )  # Log details from exception str
-        print(str(e), file=sys.stderr)  # Print details for user
+        # Print the error details directly to user
+        print(str(e), file=sys.stderr)
         msg = f"virt-install failed for domain '{name}'"
-        raise RuntimeError(msg) from e
+        raise RuntimeError(msg)
     except TimeoutError:  # Assuming run_remote_command raises TimeoutError now
         log.error(
             f"virt-install command timed out after {timeout_seconds} seconds.",
@@ -180,39 +216,38 @@ def install_domain_with_virt_install(
         log.error("Local 'ssh' command not found.")
         raise  # Re-raise original FileNotFoundError
     except Exception as e:
-        log.exception(
-            f"An unexpected error occurred during virt-install execution for {name}"
-        )
-        msg = f"Unexpected error during virt-install for {name}"
-        raise RuntimeError(msg) from e
+        msg = f"Unexpected error during virt-install for {name}: {e}"
+        log.error(msg)
+        raise RuntimeError(msg)
     finally:
-        # Best effort cleanup of remote cloud-init files
-        log.info("Attempting cleanup of remote cloud-init files...")
-        cleanup_cmd_parts = [
-            "rm",
-            "-f",
-            str(remote_user_data_path),
-            str(remote_network_config_path),
-        ]
-        try:
-            # Run cleanup command directly, ignore failures (check=False)
-            ssh_cleanup_cmd = [
-                "ssh",
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                remote_user_host,
-                "--",
-                *cleanup_cmd_parts,
+        # Best effort cleanup of remote cloud-init files (only if they were uploaded)
+        if not cdrom_volume_name:
+            log.info("Attempting cleanup of remote cloud-init files...")
+            cleanup_cmd_parts = [
+                "rm",
+                "-f",
+                str(remote_user_data_path),
+                str(remote_network_config_path),
             ]
-            subprocess.run(
-                ssh_cleanup_cmd, capture_output=True, text=True, check=False, timeout=30
-            )
-            log.info("Remote cloud-init file cleanup command executed.")
-        except Exception as cleanup_e:
-            # Log cleanup errors but don't let them mask the primary exception (if any)
-            log.warning(
-                f"Failed to cleanup remote cloud-init files: {cleanup_e}",
-                exc_info=False,
-            )
+            try:
+                # Run cleanup command directly, ignore failures (check=False)
+                ssh_cleanup_cmd = [
+                    "ssh",
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-o",
+                    "UserKnownHostsFile=/dev/null",
+                    remote_user_host,
+                    "--",
+                    *cleanup_cmd_parts,
+                ]
+                subprocess.run(
+                    ssh_cleanup_cmd, capture_output=True, text=True, check=False, timeout=30
+                )
+                log.info("Remote cloud-init file cleanup command executed.")
+            except Exception as cleanup_e:
+                # Log cleanup errors but don't let them mask the primary exception (if any)
+                log.warning(
+                    f"Failed to cleanup remote cloud-init files: {cleanup_e}",
+                    exc_info=False,
+                )

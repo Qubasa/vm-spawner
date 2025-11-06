@@ -33,23 +33,30 @@ class RemoteCommandError(RuntimeError):
         self.stderr = stderr
 
     def __str__(self) -> str:
-        details = f"Command: {' '.join(map(shlex.quote, self.command))}"
+        # Extract just the actual command (after '--')
+        try:
+            dash_index = self.command.index('--')
+            actual_command = ' '.join(map(shlex.quote, self.command[dash_index + 1:]))
+        except (ValueError, IndexError):
+            actual_command = ' '.join(map(shlex.quote, self.command))
+
+        details = f"\n{'=' * 80}\nCommand failed: {actual_command}"
         if self.returncode is not None:
-            details += f"\nReturn Code: {self.returncode}"
-        if self.stdout:
-            details += f"\nStdout:\n{self.stdout}"
+            details += f"\nExit code: {self.returncode}"
         if self.stderr:
             # Filter common SSH noise
             filtered_stderr = "\n".join(
                 line
                 for line in self.stderr.splitlines()
                 if "Pseudo-terminal will not be allocated" not in line
-                and "Warning: Permanently added"
-                not in line  # Filter common first connection noise
+                and "Warning: Permanently added" not in line
             )
             if filtered_stderr.strip():
-                details += f"\nStderr:\n{filtered_stderr}"
-        return f"{super().__str__()}\n{details}"
+                details += f"\n\nError output:\n{filtered_stderr}"
+        if self.stdout and self.stdout.strip():
+            details += f"\n\nStandard output:\n{self.stdout}"
+        details += f"\n{'=' * 80}"
+        return details
 
 
 @dataclass
@@ -99,12 +106,20 @@ def run_remote_command(
         "--",
         *command,
     ]
-    log.info(f"Executing remote command via SSH: {' '.join(map(shlex.quote, ssh_cmd))}")
+
+    # Show just the actual command being run, not the full SSH wrapper
+    actual_cmd = ' '.join(map(shlex.quote, command))
+    log.info(f"→ Running on {host}: {actual_cmd}")
+
     try:
         result = subprocess.run(
             ssh_cmd, check=check, capture_output=True, text=True, timeout=timeout
         )
-        log.info("Remote command stdout:\n%s", result.stdout)
+
+        # Only log output if it's not empty and relevant
+        if result.stdout.strip():
+            log.debug("Command output:\n%s", result.stdout)
+
         if result.stderr:
             # Filter common SSH noise before logging
             filtered_stderr = "\n".join(
@@ -114,8 +129,9 @@ def run_remote_command(
                 and "Warning: Permanently added" not in line
             )
             if filtered_stderr.strip():
-                log.warning("Remote command stderr:\n%s", filtered_stderr)
-        log.info("Remote command successful.")
+                log.warning("Command stderr:\n%s", filtered_stderr)
+
+        log.debug("✓ Command completed successfully")
         return RemoteCommandResult(
             stdout=result.stdout.strip(),
             stderr=result.stderr.strip(),
