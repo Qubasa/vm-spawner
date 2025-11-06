@@ -7,7 +7,7 @@
 }:
 let
   baseImageUrl = "https://static.clan.lol/images/nixos-installer-x86_64-linux.iso";
-  baseImageChecksum = "bc0671d86f07f8d90bfbab2ac968e685976956d6aedc9748ef07e2af3e799d7e";
+  baseImageChecksum = "1g8gkgy0w0labpcv4sxmdf0j6g1ik2zgnvb1b4izyz464r7nsrdc";
   baseImage = builtins.fetchurl {
     url = baseImageUrl;
     sha256 = baseImageChecksum;
