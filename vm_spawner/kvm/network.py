@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 import contextlib
+import logging
 import sys
 import time
 import xml.etree.ElementTree as ET
 
 import libvirt
+
+# Configure logging
+log = logging.getLogger(__name__)
 
 
 def get_domain_ip_from_network(
@@ -31,7 +35,7 @@ def get_domain_ip_from_network(
         Returns None immediately if the domain or network doesn't exist or the domain is not running.
     """
     if verbose:
-        print(
+        log.info(
             f"Attempting to find IP for domain '{domain_name}' on network '{network_name}'..."
         )
 
@@ -42,26 +46,26 @@ def get_domain_ip_from_network(
         domain = conn.lookupByName(domain_name)
     except libvirt.libvirtError as e:
         if e.get_error_code() == libvirt.VIR_ERR_NO_DOMAIN:
-            print(f"Error: Domain '{domain_name}' not found.", file=sys.stderr)
+            log.error(f"Domain '{domain_name}' not found.")
             return None
-        print(f"Error looking up domain '{domain_name}': {e}", file=sys.stderr)
+        log.error(f"Error looking up domain '{domain_name}': {e}")
         return None
 
     try:
         network = conn.networkLookupByName(network_name)
     except libvirt.libvirtError as e:
         if e.get_error_code() == libvirt.VIR_ERR_NO_NETWORK:
-            print(f"Error: Network '{network_name}' not found.", file=sys.stderr)
+            log.error(f"Network '{network_name}' not found.")
             return None
-        print(f"Error looking up network '{network_name}': {e}", file=sys.stderr)
+        log.error(f"Error looking up network '{network_name}': {e}")
         return None
 
     if not domain.isActive():
-        print(f"Info: Domain '{domain_name}' is not running.", file=sys.stderr)
+        log.info(f"Domain '{domain_name}' is not running.")
         return None
 
     if not network.isActive():
-        print(f"Info: Network '{network_name}' is not active.", file=sys.stderr)
+        log.info(f"Network '{network_name}' is not active.")
         return None
 
     target_macs = []
@@ -79,29 +83,27 @@ def get_domain_ip_from_network(
                     target_macs.append(mac_address.lower())  # Store MACs in lower case
 
         if not target_macs:
-            print(
-                f"Warning: No interface found for domain '{domain_name}' connected to network '{network_name}'.",
-                file=sys.stderr,
+            log.warning(
+                f"No interface found for domain '{domain_name}' connected to network '{network_name}'."
             )
             return None
         if verbose:
-            print(
+            log.info(
                 f"Found MAC addresses for '{domain_name}' on '{network_name}': {target_macs}"
             )
 
     except ET.ParseError as e:
-        print(f"Error parsing XML for domain '{domain_name}': {e}", file=sys.stderr)
+        log.error(f"Error parsing XML for domain '{domain_name}': {e}")
         return None
     except Exception as e:  # Catch potential other errors during XML processing
-        print(
-            f"Unexpected error processing domain XML for '{domain_name}': {e}",
-            file=sys.stderr,
+        log.error(
+            f"Unexpected error processing domain XML for '{domain_name}': {e}"
         )
         return None
 
     for attempt in range(retries):
         if verbose:
-            print(
+            log.info(
                 f"Attempt {attempt + 1}/{retries}: Querying DHCP leases on '{network_name}'..."
             )
         try:
@@ -110,7 +112,7 @@ def get_domain_ip_from_network(
             leases = network.DHCPLeases()  # Timeout parameter is optional
             if not leases:
                 if verbose:
-                    print("No active DHCP leases found on the network yet.")
+                    log.info("No active DHCP leases found on the network yet.")
 
             for lease in leases:
                 # Example lease format:
@@ -128,67 +130,70 @@ def get_domain_ip_from_network(
                     and ip_type == libvirt.VIR_IP_ADDR_TYPE_IPV4
                 ):
                     if verbose:
-                        print(f"Found matching lease: MAC={lease_mac}, IP={ip_addr}")
-                    print(
+                        log.info(f"Found matching lease: MAC={lease_mac}, IP={ip_addr}")
+                    log.info(
                         f"Success: IP address for '{domain_name}' on network '{network_name}' is {ip_addr}"
                     )
                     return ip_addr  # Found the IP for our VM's MAC
 
         except libvirt.libvirtError as e:
             # Handle cases where DHCP might not be enabled or network is down
-            print(
-                f"Warning: libvirt error getting DHCP leases (attempt {attempt + 1}): {e}",
-                file=sys.stderr,
+            log.warning(
+                f"libvirt error getting DHCP leases (attempt {attempt + 1}): {e}"
             )
             # Decide if this error is fatal or worth retrying
             if (
                 "network is not active" in str(e).lower()
                 or "DHCP server is not running" in str(e).lower()
             ):
-                print(
-                    "Error: Cannot get leases from inactive network or network without DHCP.",
-                    file=sys.stderr,
+                log.error(
+                    "Cannot get leases from inactive network or network without DHCP."
                 )
                 return (
                     None  # Don't retry if the network fundamentally won't give leases
                 )
 
         except Exception as e:
-            print(
-                f"Unexpected error getting DHCP leases (attempt {attempt + 1}): {e}",
-                file=sys.stderr,
+            log.warning(
+                f"Unexpected error getting DHCP leases (attempt {attempt + 1}): {e}"
             )
             # Could be temporary, so continue retrying unless it's clearly fatal
 
         if attempt < retries - 1:
             if verbose:
-                print(f"IP not found yet, waiting {delay} seconds...")
+                log.info(f"IP not found yet, waiting {delay} seconds...")
             time.sleep(delay)
 
-    print(
-        f"Error: Could not find DHCP lease for domain '{domain_name}' on network '{network_name}' after {retries} attempts.",
-        file=sys.stderr,
+    log.error(
+        f"Could not find DHCP lease for domain '{domain_name}' on network '{network_name}' after {retries} attempts."
     )
     return None
 
 
 # --- Example Usage ---
 if __name__ == "__main__":
+    # Configure logging for standalone execution
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s: %(message)s",
+        stream=sys.stderr
+    )
+
     # --- Configuration ---
     LIBVIRT_URI = "qemu:///system"  # Or "qemu+ssh://user@host/system" for remote
     TARGET_DOMAIN = "ubuntu-py-vm"  # Change to the actual name of your VM
     TARGET_NETWORK = "default"  # Change to the network name VM is connected to
     # --- End Configuration ---
 
-    print(f"Connecting to libvirt at {LIBVIRT_URI}...")
+    log.info(f"Connecting to libvirt at {LIBVIRT_URI}...")
     conn: libvirt.virConnect | None = None
     try:
         conn = libvirt.open(LIBVIRT_URI)
         if conn is None:
-            print(f"Failed to open connection to {LIBVIRT_URI}", file=sys.stderr)
+            log.error(f"Failed to open connection to {LIBVIRT_URI}")
             sys.exit(1)
 
-        print(
+        log.info(
             f"Connected. Trying to get IP for '{TARGET_DOMAIN}' on network '{TARGET_NETWORK}'..."
         )
 
@@ -202,26 +207,26 @@ if __name__ == "__main__":
         )
 
         if ip_address:
-            print(f"\n*** Found IP Address: {ip_address} ***")
+            log.info(f"Found IP Address: {ip_address}")
         else:
-            print(
-                f"\n*** Failed to retrieve IP address for {TARGET_DOMAIN} on {TARGET_NETWORK}. ***"
+            log.error(
+                f"Failed to retrieve IP address for {TARGET_DOMAIN} on {TARGET_NETWORK}."
             )
-            print("Possible reasons:")
-            print("- VM is not running or hasn't booted far enough to get DHCP.")
-            print("- VM is connected to a different network.")
-            print(f"- Network '{TARGET_NETWORK}' does not have DHCP enabled.")
-            print("- VM has a static IP configuration.")
-            print("- Network or Domain name is incorrect.")
+            log.error("Possible reasons:")
+            log.error("- VM is not running or hasn't booted far enough to get DHCP.")
+            log.error("- VM is connected to a different network.")
+            log.error(f"- Network '{TARGET_NETWORK}' does not have DHCP enabled.")
+            log.error("- VM has a static IP configuration.")
+            log.error("- Network or Domain name is incorrect.")
 
     except libvirt.libvirtError as e:
-        print(f"Libvirt error: {e}", file=sys.stderr)
+        log.error(f"Libvirt error: {e}")
         sys.exit(1)
     except Exception as e:
-        print(f"An unexpected error occurred: {e}", file=sys.stderr)
+        log.error(f"An unexpected error occurred: {e}")
         sys.exit(1)
     finally:
         if conn:
             with contextlib.suppress(libvirt.libvirtError):
                 conn.close()
-                print("Libvirt connection closed.")
+                log.info("Libvirt connection closed.")

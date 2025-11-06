@@ -277,11 +277,10 @@ def ensure_volume_from_file(
                     if file_size_bytes > 0
                     else 0.0
                 )
-                print(
-                    f"\r  Uploaded {uploaded_bytes / 1024 / 1024:.2f} / {file_size_bytes / 1024 / 1024:.2f} MB"
-                    f" ({percent:.1f}%) at {speed:.2f} MB/s",
-                    end="",
-                    flush=True,
+                # Progress logging (debug level to avoid clutter)
+                log.debug(
+                    f"Uploaded {uploaded_bytes / 1024 / 1024:.2f} / {file_size_bytes / 1024 / 1024:.2f} MB"
+                    f" ({percent:.1f}%) at {speed:.2f} MB/s"
                 )
 
         log.debug("Finishing upload stream...")
@@ -292,7 +291,7 @@ def ensure_volume_from_file(
             msg = f"Stream finish error for volume '{vol_name}'"
             raise RuntimeError(msg)
 
-        print(f"\nVolume '{vol_name}' created and uploaded successfully.")
+        log.info(f"Volume '{vol_name}' created and uploaded successfully.")
         return created_vol
 
     except (libvirt.libvirtError, OSError, RemoteCommandError) as e:
@@ -428,7 +427,6 @@ def create_blank_disk(
         log.error(
             f"Remote command failed during blank disk creation: {e}", exc_info=False
         )
-        print(str(e), file=sys.stderr)
         raise
     except Exception as e:
         log.exception("An unexpected error occurred creating blank disk.")
@@ -542,7 +540,6 @@ def create_linked_clone_disk(
         log.error(
             f"Remote command failed during linked clone creation: {e}", exc_info=False
         )
-        print(str(e), file=sys.stderr)  # Show details
         raise  # Re-raise the specific error
     except Exception as e:
         log.exception("An unexpected error occurred creating linked clone disk.")

@@ -110,9 +110,8 @@ def main() -> None:
             print(json.dumps(output, indent=2))
         else:
             # Should be caught by argparse 'required=True' on subcommand
-            print(
-                f"Error: Invalid subcommand '{args.subcommand}'. Use 'create' or 'destroy'.",
-                file=sys.stderr,
+            log.error(
+                f"Invalid subcommand '{args.subcommand}'. Use 'create' or 'destroy'."
             )
             exit_code = 1
 
@@ -124,21 +123,15 @@ def main() -> None:
         FileNotFoundError,
         ValueError,
     ) as e:
-        print("\n--- Error ---", file=sys.stderr)
-        print(f"Operation failed: {e}", file=sys.stderr)
-        # Add traceback for debugging if needed, or rely on logs
-        # traceback.print_exc(file=sys.stderr)
-        log.debug(
-            "Full traceback:", exc_info=True
-        )  # Log full trace if debug level is enabled
+        log.error(f"Operation failed: {e}")
+        log.debug("Full traceback:", exc_info=True)
         exit_code = 1
     except KeyboardInterrupt:
-        print("\nOperation cancelled by user.", file=sys.stderr)
+        log.info("Operation cancelled by user.")
         exit_code = 1
     except Exception as e:
-        print("\n--- Unexpected Error ---", file=sys.stderr)
-        print(f"An unexpected error occurred: {e}", file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
+        log.error(f"Unexpected error: {e}")
+        log.debug("Full traceback:", exc_info=True)
         exit_code = 1
 
     sys.exit(exit_code)

@@ -190,14 +190,13 @@ def download_file(url: str, destination: Path, checksum: str | None = None) -> N
                     if elapsed_time > 0
                     else 0.0
                 )
-                print(
-                    f"\r  Downloaded {downloaded_size / 1024 / 1024:.2f}"
+                # Progress logging (debug level to avoid clutter)
+                log.debug(
+                    f"Downloaded {downloaded_size / 1024 / 1024:.2f}"
                     f"{f' / {total_size / 1024 / 1024:.2f}' if total_size > 0 else ''} MB"
-                    f"{percent_str} at {speed:.2f} MB/s   ",
-                    end="",
-                    flush=True,
+                    f"{percent_str} at {speed:.2f} MB/s"
                 )
-            print("\nDownload complete.")  # Newline after progress
+            log.info("Download complete.")
 
     except (urllib.error.HTTPError, urllib.error.URLError) as e:
         log.error(f"Network error downloading {url}: {e}", exc_info=True)

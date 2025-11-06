@@ -202,8 +202,8 @@ def install_domain_with_virt_install(
 
     except RemoteCommandError as e:
         # This catches non-zero exit code from virt-install
-        # Print the error details directly to user
-        print(str(e), file=sys.stderr)
+        # Log the error details
+        log.error(str(e))
         msg = f"virt-install failed for domain '{name}'"
         raise RuntimeError(msg)
     except TimeoutError:  # Assuming run_remote_command raises TimeoutError now

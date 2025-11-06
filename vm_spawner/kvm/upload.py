@@ -1,9 +1,13 @@
+import logging
 import shlex
 import subprocess
 import tarfile
 from pathlib import Path
 from shlex import quote
 from tempfile import TemporaryDirectory
+
+# Configure logging
+log = logging.getLogger(__name__)
 
 
 def upload(
@@ -115,5 +119,5 @@ def upload(
                 str(remote_dest),
                 f"{dir_mode:o}",
             ]
-            print(shlex.join(cmd_2))
+            log.debug(f"Running upload command: {shlex.join(cmd_2)}")
             subprocess.run(cmd_2, input=f.read(), check=True)
