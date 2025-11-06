@@ -2,6 +2,7 @@
 
 # ruff: noqa: TRY301 TRY300
 import argparse
+import json
 import logging
 import os
 import sys
@@ -14,10 +15,11 @@ from .deploy_vm import deploy_vm_auto
 from .destroy import delete_vm
 from .remote import RemoteCommandError
 
-# Configure logging
+# Configure logging to use stderr
 logging.basicConfig(
     level=logging.INFO,
-    format="%(levelname)s: %(message)s"
+    format="%(levelname)s: %(message)s",
+    stream=sys.stderr
 )
 log = logging.getLogger(__name__)
 
@@ -80,25 +82,32 @@ def main() -> None:
             base_image = os.environ.get("CLAN_BASE_IMAGE", "")
             is_iso = base_image.lower().endswith(".iso")
 
-            print("\n--- Success ---")
-            print(f"VM Deployed: {vm_info.name}")
-            print(f"IP Address:  {vm_info.ip}")
-            print(f"Host:        {args.remote_user_host}")
+            # Output JSON to stdout
+            output = {
+                "name": vm_info.name,
+                "ip": vm_info.ip,
+                "host": args.remote_user_host,
+            }
 
             if is_iso:
-                print("\nISO installation started. The VM is now booting from the installer.")
-                print("Connect to the VM console to complete installation:")
-                print(f"ssh {args.remote_user_host} virsh console {vm_info.name}")
+                output["installation_type"] = "iso"
+                output["console_command"] = f"ssh {args.remote_user_host} virsh console {vm_info.name}"
             else:
-                print("\nConnect via SSH (once cloud-init completes):")
-                print(f"ssh -J {args.remote_user_host} root@{vm_info.ip}")
-                print("Password is: root:terraform")
+                output["installation_type"] = "cloud-init"
+                output["ssh_command"] = f"ssh -J {args.remote_user_host} root@{vm_info.ip}"
+                output["password"] = "root:terraform"
+
+            print(json.dumps(output, indent=2))
         elif args.subcommand == "destroy" or args.subcommand == "d":
             delete_vm(host=args.remote_user_host, domain_name=args.name, ssh_key=args.ssh_key)
-            print("\n--- Success ---")
-            print(
-                f"VM '{args.name}' deletion process completed on {args.remote_user_host}."
-            )
+
+            # Output JSON to stdout
+            output = {
+                "name": args.name,
+                "host": args.remote_user_host,
+                "status": "deleted"
+            }
+            print(json.dumps(output, indent=2))
         else:
             # Should be caught by argparse 'required=True' on subcommand
             print(

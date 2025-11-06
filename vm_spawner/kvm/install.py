@@ -121,7 +121,7 @@ def install_domain_with_virt_install(
         f"--connect={libvirt_system_uri}",
         f"--name={name}",
         f"--memory={memory_mb}",
-        f"--vcpus={vcpu}",
+        f"--vcpus={vcpu}"
     ]
 
     # Configure disk and boot based on whether we're using CDROM (ISO) or not
