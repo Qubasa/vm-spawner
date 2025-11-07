@@ -126,13 +126,12 @@ def install_domain_with_virt_install(
 
     # Configure disk and boot based on whether we're using CDROM (ISO) or not
     if cdrom_volume_name:
-        # ISO installation: add blank disk, CDROM, and virtiofs filesystem for /nix/store
-        # virtiofs requires shared memory with memfd backend
+        # ISO installation: add blank disk, CDROM, and virtfs filesystems for /nix/store and /nix/var/nix/db
         virt_install_cmd.extend([
             f"--disk=vol={pool_name}/{disk_volume_name},device=disk,bus=virtio",
             f"--disk=vol={pool_name}/{cdrom_volume_name},device=cdrom,bus=sata,readonly=on",
-            "--memorybacking=source.type=memfd,access.mode=shared",
-            "--filesystem=/nix/store,nix-store,driver.type=virtiofs,readonly=on",
+            "--filesystem=type=mount,source=/nix/store,target=hoststore,readonly=on",
+            "--filesystem=type=mount,source=/nix/var/nix/db,target=hostdb,readonly=on",
         ])
     else:
         # Direct disk import: use the disk volume
