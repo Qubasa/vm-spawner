@@ -16,6 +16,7 @@ from .create import (
     ensure_volume_from_file,
     get_or_create_pool,
 )
+from .download import calculate_file_hash, download_file
 from .install import install_domain_with_virt_install
 from .network import ensure_network_active, get_domain_ip_from_network
 from .remote import run_remote_command
@@ -96,14 +97,29 @@ def deploy_vm(cfg: DeployVMConfig, ssh_key: Path | None) -> VMConfig:
             ssh_key,
         )
 
-        # 4. Ensure Base Image Volume exists in Pool (Download locally, then upload if needed)
+        # 4. Ensure Base Image is downloaded locally and calculate hash for volume name
+        log.info(f"Ensuring base image exists locally at {local_base_image_path}...")
+        download_file(cfg.base_image_url, local_base_image_path, cfg.base_image_checksum)
+
+        # Calculate hash of the local file to include in volume name
+        log.info("Calculating hash of base image...")
+        file_hash = calculate_file_hash(local_base_image_path)
+        hash_short = file_hash[:16]  # Use first 16 chars of hash
+
+        # Generate volume name with hash
+        base_name = Path(cfg.base_image_url).stem  # Filename without extension
+        extension = Path(cfg.base_image_url).suffix  # .iso, .qcow2, etc.
+        hashed_vol_name = f"{base_name}-{hash_short}{extension}"
+        log.info(f"Using volume name with hash: {hashed_vol_name}")
+
+        # 5. Ensure Base Image Volume exists in Pool (Upload if needed)
         # ensure_volume_from_file raises exceptions on failure
-        log.info(f"Ensuring base volume '{cfg.base_image_vol_name}' exists...")
+        log.info(f"Ensuring base volume '{hashed_vol_name}' exists in storage pool...")
         base_volume = ensure_volume_from_file(
             conn,
             storage_pool,
             cfg.remote_user_host,
-            cfg.base_image_vol_name,
+            hashed_vol_name,
             local_base_image_path,
             cfg.base_image_format,
             cfg.base_image_url,
@@ -111,13 +127,13 @@ def deploy_vm(cfg: DeployVMConfig, ssh_key: Path | None) -> VMConfig:
             ssh_key,
         )
 
-        # 5. Handle disk setup based on image format
+        # 6. Handle disk setup based on image format
         is_iso = cfg.base_image_format.lower() == "iso"
 
         if is_iso:
             # For ISO: use the ISO directly as CDROM, create a blank disk for OS installation
-            log.info(f"Using ISO '{cfg.base_image_vol_name}' as installation media...")
-            iso_volume_name = cfg.base_image_vol_name
+            log.info(f"Using ISO '{hashed_vol_name}' as installation media...")
+            iso_volume_name = hashed_vol_name
             # Create a blank disk for the VM
             from .create import create_blank_disk
             blank_disk_path = create_blank_disk(
@@ -142,7 +158,7 @@ def deploy_vm(cfg: DeployVMConfig, ssh_key: Path | None) -> VMConfig:
             disk_volume_name = cloned_disk_path.name
             cdrom_volume_name = None
 
-        # 6. Create Domain using virt-install
+        # 7. Create Domain using virt-install
         # install_domain_with_virt_install raises exceptions on failure
         log.info(
             f"Installing domain '{cfg.domain_name}'..."
@@ -168,7 +184,7 @@ def deploy_vm(cfg: DeployVMConfig, ssh_key: Path | None) -> VMConfig:
         )
 
         # --- Post-Install ---
-        # 7. Get VM IP Address
+        # 8. Get VM IP Address
         log.info(
             f"Retrieving IP address for domain '{cfg.domain_name}' on network '{cfg.isolated_network}'..."
         )

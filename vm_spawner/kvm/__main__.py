@@ -78,24 +78,11 @@ def main() -> None:
         if args.subcommand == "create" or args.subcommand == "c":
             vm_info = deploy_vm_auto(host=args.remote_user_host, ssh_key=args.ssh_key)
 
-            # Check if using ISO installation
-            base_image = os.environ.get("CLAN_BASE_IMAGE", "")
-            is_iso = base_image.lower().endswith(".iso")
-
             # Output JSON to stdout
             output = {
                 "name": vm_info.name,
                 "ip": vm_info.ip,
-                "host": args.remote_user_host,
             }
-
-            if is_iso:
-                output["installation_type"] = "iso"
-                output["console_command"] = f"ssh {args.remote_user_host} virsh console {vm_info.name}"
-            else:
-                output["installation_type"] = "cloud-init"
-                output["ssh_command"] = f"ssh -J {args.remote_user_host} root@{vm_info.ip}"
-                output["password"] = "root:terraform"
 
             print(json.dumps(output, indent=2))
         elif args.subcommand == "destroy" or args.subcommand == "d":
@@ -104,8 +91,6 @@ def main() -> None:
             # Output JSON to stdout
             output = {
                 "name": args.name,
-                "host": args.remote_user_host,
-                "status": "deleted"
             }
             print(json.dumps(output, indent=2))
         else:

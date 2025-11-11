@@ -16,6 +16,37 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
+def calculate_file_hash(file_path: Path) -> str:
+    """
+    Calculates the SHA256 hash of a file.
+
+    Returns:
+        The hex digest of the SHA256 hash.
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        OSError: If the file cannot be read.
+    """
+    log.debug(f"Calculating SHA256 hash for {file_path}...")
+    hasher = hashlib.sha256()
+    try:
+        with file_path.open("rb") as f:
+            while True:
+                chunk = f.read(65536)  # Read in 64k chunks
+                if not chunk:
+                    break
+                hasher.update(chunk)
+        hash_value = hasher.hexdigest()
+        log.debug(f"Hash calculated: {hash_value}")
+        return hash_value
+    except FileNotFoundError:
+        log.error(f"File not found for hash calculation: {file_path}")
+        raise
+    except OSError as e:
+        log.error(f"Error reading file {file_path} for hash: {e}", exc_info=True)
+        msg = f"Could not read file {file_path} for hash"
+        raise RuntimeError(msg) from e
+
+
 def _verify_checksum(file_path: Path, expected_checksum: str) -> None:
     """
     Verifies the SHA256 checksum of a file.
