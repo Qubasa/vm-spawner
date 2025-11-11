@@ -11,6 +11,52 @@ import libvirt
 log = logging.getLogger(__name__)
 
 
+def ensure_network_active(
+    conn: libvirt.virConnect,
+    network_name: str = "default",
+) -> libvirt.virNetwork:
+    """
+    Ensures the specified libvirt network is active, starting it if necessary.
+
+    Args:
+        conn: An active libvirt connection object.
+        network_name: The name of the libvirt network to check/start.
+
+    Returns:
+        The active libvirt.virNetwork object.
+
+    Raises:
+        RuntimeError: If the network doesn't exist or cannot be started.
+        libvirt.libvirtError: For underlying libvirt API errors.
+    """
+    network: libvirt.virNetwork | None = None
+    try:
+        log.info(f"Looking up network '{network_name}'...")
+        network = conn.networkLookupByName(network_name)
+        log.info(f"Found network '{network_name}'.")
+    except libvirt.libvirtError as e:
+        if e.get_error_code() == libvirt.VIR_ERR_NO_NETWORK:
+            msg = f"Network '{network_name}' not found."
+            log.error(msg)
+            raise RuntimeError(msg) from e
+        log.error(f"Error looking up network '{network_name}': {e}")
+        raise
+
+    if not network.isActive():
+        log.info(f"Network '{network_name}' is not active. Starting...")
+        try:
+            network.create()
+            log.info(f"Network '{network_name}' started successfully.")
+        except libvirt.libvirtError as e:
+            msg = f"Failed to start network '{network_name}'"
+            log.error(f"{msg}: {e}")
+            raise RuntimeError(msg) from e
+    else:
+        log.info(f"Network '{network_name}' is already active.")
+
+    return network
+
+
 def get_domain_ip_from_network(
     conn: libvirt.virConnect,
     domain_name: str,

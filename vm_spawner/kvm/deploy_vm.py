@@ -17,7 +17,7 @@ from .create import (
     get_or_create_pool,
 )
 from .install import install_domain_with_virt_install
-from .network import get_domain_ip_from_network
+from .network import ensure_network_active, get_domain_ip_from_network
 from .remote import run_remote_command
 
 # Configure logging
@@ -77,7 +77,15 @@ def deploy_vm(cfg: DeployVMConfig, ssh_key: Path | None) -> VMConfig:
         # 1. Connect to Libvirt
         conn = connect_libvirt(cfg.libvirt_uri)
 
-        # 2. Get/Create Storage Pool
+        # 2. Ensure network is active
+        log.info(f"Ensuring network '{cfg.primary_network}' is active...")
+        ensure_network_active(conn, cfg.primary_network)
+
+        if cfg.isolated_network:
+            log.info(f"Ensuring isolated network '{cfg.isolated_network}' is active...")
+            ensure_network_active(conn, cfg.isolated_network)
+
+        # 3. Get/Create Storage Pool
         # get_or_create_pool raises exceptions on failure
         storage_pool = get_or_create_pool(
             conn,
@@ -88,7 +96,7 @@ def deploy_vm(cfg: DeployVMConfig, ssh_key: Path | None) -> VMConfig:
             ssh_key,
         )
 
-        # 3. Ensure Base Image Volume exists in Pool (Download locally, then upload if needed)
+        # 4. Ensure Base Image Volume exists in Pool (Download locally, then upload if needed)
         # ensure_volume_from_file raises exceptions on failure
         log.info(f"Ensuring base volume '{cfg.base_image_vol_name}' exists...")
         base_volume = ensure_volume_from_file(
@@ -103,7 +111,7 @@ def deploy_vm(cfg: DeployVMConfig, ssh_key: Path | None) -> VMConfig:
             ssh_key,
         )
 
-        # 4. Handle disk setup based on image format
+        # 5. Handle disk setup based on image format
         is_iso = cfg.base_image_format.lower() == "iso"
 
         if is_iso:
@@ -134,7 +142,7 @@ def deploy_vm(cfg: DeployVMConfig, ssh_key: Path | None) -> VMConfig:
             disk_volume_name = cloned_disk_path.name
             cdrom_volume_name = None
 
-        # 5. Create Domain using virt-install
+        # 6. Create Domain using virt-install
         # install_domain_with_virt_install raises exceptions on failure
         log.info(
             f"Installing domain '{cfg.domain_name}'..."
@@ -160,7 +168,7 @@ def deploy_vm(cfg: DeployVMConfig, ssh_key: Path | None) -> VMConfig:
         )
 
         # --- Post-Install ---
-        # 6. Get VM IP Address
+        # 7. Get VM IP Address
         log.info(
             f"Retrieving IP address for domain '{cfg.domain_name}' on network '{cfg.isolated_network}'..."
         )
